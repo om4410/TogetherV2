@@ -1,0 +1,322 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Together — Sangat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css"></head><body>
+<section id="login" class="login-screen" aria-label="Enter SANGAT">
+  <div class="login-backdrop"></div>
+  <div class="login-card">
+    <div class="login-brand">TOGETHER<span>●</span><small>music • chat • sangat</small></div>
+    <div class="login-badge">SANGAT / 01</div>
+    <h1>Same song.<br><em>Different cities.</em></h1>
+    <p class="login-sub">Create a listening room, invite your people and enjoy the same music together.</p>
+    <div class="login-form">
+      <label for="name">DISPLAY NAME</label>
+      <input id="name" name="displayName" type="text" maxlength="24" placeholder="What should your friends call you?" autocomplete="off" spellcheck="false">
+      <label for="roomCodeInput">ROOM CODE <span>(optional)</span></label>
+      <input id="roomCodeInput" name="roomCode" type="text" maxlength="24" placeholder="Leave blank to create a room" autocomplete="off" spellcheck="false">
+      <button id="join" type="button" class="enter-button">ENTER THE ROOM →</button>
+      <div id="loginError" class="login-error" role="alert"></div>
+    </div>
+    <div class="login-note">one room · many cities · one vibe</div>
+  </div>
+</section>
+
+<div id="app" class="hidden">
+<header><div class="headerLogo"><div class="logo">TOGETHER<span>●</span><small>music • chat • sangat</small></div></div>
+<div class="roomBox">ROOM CODE <b id="roomCode"></b><button id="copy">COPY INVITE</button></div>
+<div class="me"><span id="meAvatar">●</span><b id="meName"></b><button id="leave">×</button></div></header>
+
+<main>
+<aside class="left">
+<nav><button class="navBtn active" data-target="home">⌂ HOME</button><button class="navBtn" data-target="queueCard">☷ QUEUE</button><button class="navBtn" data-target="peopleBox">♧ PEOPLE</button><button class="navBtn" data-target="chatBox">◌ CHAT</button></nav>
+<div id="peopleBox" class="people"><h3>PEOPLE IN ROOM <span id="peopleCount">0</span></h3><div id="users"></div></div>
+<div class="vibeBox"><b>THE SANGAT IS LIVE ♥</b><span>Same room, different cities.</span><div class="crowd">✦ ♫ ✦</div></div>
+</aside>
+
+<section class="center">
+<div class="playerCard"><div class="now">♫ NOW PLAYING <span id="heart">♡</span></div><div id="player"></div>
+<div class="track"><div><b id="title">Waiting for a track</b><span id="status">Paste a YouTube link below</span></div><button id="yt" type="button">YouTube ↗</button></div><div id="youtubeInline" class="youtubeInline hidden"><div class="youtubeInlineHead"><b>YouTube</b><button id="closeYouTubeInline" type="button">×</button></div><div class="youtubeInlineBody">The official YouTube player is active above. Use the YouTube button to focus the player and its standard YouTube controls.</div></div>
+<div class="controls"><span id="cur">0:00</span><input id="seek" type="range" min="0" max="100" value="0"><span id="dur">0:00</span></div>
+<div class="controlBtns"><button id="back10" title="Back 10 seconds">↶</button><button id="prev">|◀</button><button id="play" class="play">▶</button><button id="nextTop">▶|</button><button id="forward10" title="Forward 10 seconds">↷</button></div></div>
+<div class="loadRow"><input id="url" placeholder="Paste a YouTube link here"><button id="load">LOAD</button></div>
+<div id="queueCard" class="queueCard"><div class="head"><h2>⚡ UP NEXT</h2><button id="next">NEXT ▶</button></div><div id="queue"></div></div>
+</section>
+
+<aside class="right"><div id="chatBox" class="chat"><div class="head"><h2>▱ LIVE CHAT</h2></div><div id="messages"></div><form id="chatForm"><input id="chatInput" maxlength="400" placeholder="Type a message..."><button>➤</button></form></div>
+<div class="vibeMeter"><div class="head"><h2>⚡ VIBE METER</h2><select id="vibeFilter" aria-label="Filter vibe meter"><option value="all">All people</option><option value="high">Highest vibe</option><option value="upvotes">Most upvoted</option><option value="downvotes">Most downvoted</option><option value="new">Newest</option></select></div><p class="vibeHint">Rate each person's vibe in this room.</p><div id="vibeUsers"></div></div></aside>
+</main><div id="toast"></div><script src="/socket.io/socket.io.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+const $=id=>document.getElementById(id);
+const socket=io();
+let room="",player=null,ready=false,suppress=false,pending=null,isHost=false;
+function vid(v){try{let u=new URL(v.trim());if(u.hostname==="youtu.be")return u.pathname.slice(1).split("/")[0];if(u.hostname.includes("youtube.com"))return u.searchParams.get("v")||u.pathname.split("/")[2]}catch(e){}return /^[A-Za-z0-9_-]{11}$/.test(v.trim())?v.trim():null}
+function normalizeRoom(v){v=String(v||"").trim();try{let u=new URL(v);v=u.searchParams.get("room")||v}catch(e){}return v.replace(/[^A-Za-z0-9_-]/g,"").slice(0,24).toUpperCase()}
+function code(){const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";return [...Array(6)].map(()=>chars[Math.floor(Math.random()*chars.length)]).join("")}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function time(s){s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")}
+function enter(){
+  const n=String($("name").value||"").trim();
+  const r=normalizeRoom($("roomCodeInput").value)||code();
+  if(!n){$("loginError").textContent="Please enter a display name.";$("name").focus();return;}
+  localStorage.setItem("togetherName",n);
+  localStorage.setItem("togetherRoom",r);
+  room=r;
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  $("roomCode").textContent=r;
+  $("meName").textContent=n;
+  $("meAvatar").textContent=n[0].toUpperCase();
+  history.replaceState({},"","?room="+encodeURIComponent(r));
+  socket.emit("join",{room:r,name:n,avatar:n[0].toUpperCase()});
+}
+
+document.addEventListener("DOMContentLoaded",()=>{
+  const saved=localStorage.getItem("togetherName")||"";
+  $("name").value=saved;
+  const initial=new URLSearchParams(location.search).get("room");
+  if(initial) $("roomCodeInput").value=normalizeRoom(initial);
+  $("name").addEventListener("input",()=>{$("loginError").textContent="";});
+  $("roomCodeInput").addEventListener("input",e=>{e.target.value=e.target.value.toUpperCase();});
+  $("name").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();enter();}});
+  $("roomCodeInput").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();enter();}});
+  $("join").addEventListener("click",enter);
+  const savedRoom=normalizeRoom(initial||localStorage.getItem("togetherRoom")||"");
+  if(saved && savedRoom){
+    $("roomCodeInput").value=savedRoom;
+    setTimeout(()=>enter(),150);
+  }else{
+    setTimeout(()=>$("name").focus(),100);
+  }
+});
+
+function copyText(text){
+  if(navigator.clipboard && window.isSecureContext){
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve,reject)=>{
+    const ta=document.createElement("textarea");
+    ta.value=text; ta.setAttribute("readonly","");
+    ta.style.position="fixed"; ta.style.left="-9999px"; ta.style.top="0";
+    document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0,ta.value.length);
+    let ok=false; try{ok=document.execCommand("copy")}catch(e){}
+    ta.remove(); ok?resolve():reject(new Error("copy failed"));
+  });
+}
+$("copy").addEventListener("click",async()=>{
+  const r=room||$("roomCode").textContent.trim();
+  if(!r)return toast("Room code is not ready yet");
+  const invite=new URL(location.href);
+  invite.search="?room="+encodeURIComponent(r);
+  invite.hash="";
+  const text=invite.toString();
+  try{
+    if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);toast("Invite link copied ✓");return;}
+    await copyText(text);toast("Invite link copied ✓");
+  }catch(e){
+    const ok=window.prompt("Copy this invite link:",text);
+    if(ok!==null)toast("Invite link ready to copy");
+  }
+});
+$("leave").onclick=()=>{localStorage.removeItem("togetherRoom");socket.disconnect();location.href=location.pathname};
+$("heart").onclick=()=>{$("heart").textContent=$("heart").textContent==="♡"?"♥":"♡";toast($("heart").textContent==="♥"?"Added to favourites":"Removed from favourites")};
+const youtubeInline=$("youtubeInline");
+function openYouTubeInline(){
+  const id=player?.getVideoData?.().video_id || vid($("url").value||"");
+  if(!id)return toast("Load a YouTube track first");
+  youtubeInline.classList.remove("hidden");
+  document.querySelector(".playerCard")?.scrollIntoView({behavior:"smooth",block:"center"});
+  if(player?.getIframe) player.getIframe().focus();
+  toast("YouTube player ready ✓");
+}
+$("yt").addEventListener("click",openYouTubeInline);
+$("closeYouTubeInline").addEventListener("click",()=>youtubeInline.classList.add("hidden"));
+
+window.onYouTubeIframeAPIReady=()=>{if(pending)makePlayer(pending)};
+function makePlayer(id){if(!window.YT||!YT.Player){pending=id;return}pending=null;if(player){suppress=true;player.loadVideoById(id);setTimeout(()=>suppress=false,800);return}player=new YT.Player("player",{videoId:id,width:"100%",height:"100%",playerVars:{playsinline:1,rel:0,controls:1,enablejsapi:1},events:{onReady:()=>{ready=true},onStateChange:e=>{if(suppress)return;let p=player.getCurrentTime()||0;if(e.data===1)socket.emit("play",p);if(e.data===2)socket.emit("pause",p);if(e.data===0)socket.emit("next")}}})}
+
+// Never allow playback to continue when the SANGAT page is hidden/backgrounded.
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden && player && ready){
+    try{player.pauseVideo();}catch(e){}
+  }
+});
+window.addEventListener("pagehide",()=>{
+  if(player && ready){try{player.pauseVideo();}catch(e){}}
+});
+
+function apply(s){if(!s||!s.videoId)return;if(!ready){pending=s.videoId;setTimeout(()=>{if(pending&&window.YT&&YT.Player)makePlayer(pending)},250);return}let wait=Math.max(0,(s.executeAt||Date.now())-Date.now());let target=s.position+(s.playing?Math.max(0,((s.executeAt||Date.now())-s.serverNow))/1000:0);clearTimeout(window._syncTimer);window._syncTimer=setTimeout(()=>{if(!player)return;suppress=true;let cur=player.getVideoData()?.video_id;if(cur!==s.videoId){player.loadVideoById({videoId:s.videoId,startSeconds:target});setTimeout(()=>{if(s.playing)player.playVideo();else player.pauseVideo();suppress=false},500)}else{let drift=(player.getCurrentTime()||0)-target;if(Math.abs(drift)>.35)player.seekTo(target,true);if(s.playing)player.playVideo();else player.pauseVideo();setTimeout(()=>suppress=false,450)}$("title").textContent=s.title||"YouTube track";$("status").textContent=s.playing?"in sync":"paused"},wait)}
+function hardSync(s){if(!s||!s.videoId||!ready||!player)return;let target=s.position+(s.playing?(Date.now()-s.serverNow)/1000:0);let drift=(player.getCurrentTime()||0)-target;if(Math.abs(drift)>.45){suppress=true;player.seekTo(target,true);if(s.playing)player.playVideo();else player.pauseVideo();setTimeout(()=>suppress=false,350)}}
+function updateHostUI(){
+  const ids=["load","play","prev","next","nextTop","back10","forward10","seek"];
+  ids.forEach(id=>{const el=$(id);if(el){el.disabled=!isHost;el.title=isHost?"Host control":"Only the host can control playback";}});
+  $("meName").textContent=localStorage.togetherName+(isHost?" · HOST":"");
+  $("status").textContent=isHost ? ($("status").textContent==="Waiting for a track"?"You control the room":"Host controls playback") : ($("status").textContent==="Waiting for a track"?"Waiting for the host":"Host controls playback");
+}
+function render(s){window._lastUsers=s.users;isHost=s.hostId===socket.id;updateHostUI();if(s.videoId&&!player)makePlayer(s.videoId);apply(s);$("peopleCount").textContent=s.users.length;$("users").innerHTML=s.users.map(u=>`<div class="user"><i style="background:${u.color}">${esc(u.avatar)}</i><span>${esc(u.name)}</span>${u.name===localStorage.togetherName?"<small>you</small>":""}${u.host?"<small>host</small>":""}<em>●</em></div>`).join("");$("queue").innerHTML=s.queue.length?s.queue.map((q,i)=>`<div class="q"><b>${i+1}</b><div><strong>${esc(q.title)}</strong><small>Added by ${esc(q.by)}</small></div><button data-remove="${i}">×</button></div>`).join(""):"";$("messages").innerHTML=s.messages.map(m=>`<div class="msg"><i style="background:${m.color}"></i><div><b>${esc(m.name)}</b><small>${m.time}</small><p>${esc(m.text)}</p></div></div>`).join("");$("messages").scrollTop=$("messages").scrollHeight;renderVibes(s.users)}
+function toast(t){$("toast").textContent=t;$("toast").classList.add("show");clearTimeout(window._toast);window._toast=setTimeout(()=>$("toast").classList.remove("show"),1800)}
+$("queue").onclick=e=>{let b=e.target.closest("[data-remove]");if(b)socket.emit("queue:remove",Number(b.dataset.remove))};
+$("load").onclick=()=>{let id=vid($("url").value);if(!id)return toast("Paste a valid YouTube link");socket.emit("load",{videoId:id,title:"YouTube track"});$("url").value=""};
+$("next").onclick=()=>socket.emit("next");$("nextTop").onclick=()=>socket.emit("next");$("prev").onclick=()=>socket.emit("previous");
+$("back10").onclick=()=>{if(player){let p=Math.max(0,(player.getCurrentTime()||0)-10);player.seekTo(p,true);socket.emit("seek",p)}};
+$("forward10").onclick=()=>{if(player){let p=Math.min(player.getDuration()||0,(player.getCurrentTime()||0)+10);player.seekTo(p,true);socket.emit("seek",p)}};
+$("play").onclick=()=>{if(!player)return toast("Load a track first");let p=player.getCurrentTime()||0;if(player.getPlayerState()===1)socket.emit("pause",p);else socket.emit("play",p)};
+$("chatForm").onsubmit=e=>{e.preventDefault();let x=$("chatInput").value.trim();if(x){socket.emit("chat",x);$("chatInput").value=""}};
+$("seek").oninput=()=>{if(player){let d=player.getDuration()||0;$("cur").textContent=time(d*Number($("seek").value)/100)}};
+$("seek").onchange=()=>{if(player){let p=($("seek").value/100)*(player.getDuration()||0);player.seekTo(p,true);socket.emit("seek",p)}};
+setInterval(()=>{if(player&&ready){let p=player.getCurrentTime()||0,d=player.getDuration()||0;$("cur").textContent=time(p);$("dur").textContent=time(d);if(d&&document.activeElement!==$("seek"))$("seek").value=p/d*100}},500);
+
+document.querySelectorAll(".navBtn").forEach(btn=>btn.onclick=()=>{document.querySelectorAll(".navBtn").forEach(x=>x.classList.remove("active"));btn.classList.add("active");let target=btn.dataset.target;let el=target==="home"?document.querySelector(".playerCard"):$(target);el?.scrollIntoView({behavior:"smooth",block:"start"})});
+function renderVibes(users){const box=$("vibeUsers");const filter=$("vibeFilter").value;let list=[...users];if(filter==="high")list.sort((a,b)=>(b.vibe||0)-(a.vibe||0));else if(filter==="upvotes")list.sort((a,b)=>(b.upvotes||0)-(a.upvotes||0));else if(filter==="downvotes")list.sort((a,b)=>(b.downvotes||0)-(a.downvotes||0));else if(filter==="new")list.sort((a,b)=>(b.joinedAt||0)-(a.joinedAt||0));box.innerHTML=list.map(u=>{const score=u.vibe||0;const myVote=u.myVote||0;return `<div class="vibeUser"><div class="vibeIdentity"><i style="background:${u.color}">${esc(u.avatar)}</i><div><b>${esc(u.name)}</b><small>${u.upvotes||0} up · ${u.downvotes||0} down</small></div></div><div class="vibeActions"><strong class="${score>0?'positive':score<0?'negative':''}">${score>0?'+':''}${score}</strong><button class="vibeVote ${myVote===1?'selected':''}" data-vote="1" data-target="${u.id}" aria-label="Upvote ${esc(u.name)}">👍</button><button class="vibeVote ${myVote===-1?'selected':''}" data-vote="-1" data-target="${u.id}" aria-label="Downvote ${esc(u.name)}">👎</button></div></div>`}).join("")||'<div class="empty">No one else is here yet.</div>'}
+$("vibeFilter").onchange=()=>{if(window._lastUsers)renderVibes(window._lastUsers)};
+$("vibeUsers").onclick=e=>{const b=e.target.closest("[data-vote]");if(!b)return;socket.emit("vibe:vote",{targetId:b.dataset.target,direction:Number(b.dataset.vote)})};
+socket.on("connect",()=>{
+  if(room){
+    const n=localStorage.togetherName||$("name").value.trim();
+    socket.emit("join",{room,name:n,avatar:(n||"G")[0].toUpperCase()});
+  }
+});
+socket.on("state",render);
+socket.on("playback",apply);
+socket.on("sync",hardSync);
+socket.on("notice",n=>toast(n.text));
+window.addEventListener("load",()=>setTimeout(()=>{const app=document.getElementById("app"), nameInput=document.getElementById("name"); if(app && !app.classList.contains("hidden")) return; if(nameInput) nameInput.focus();},150));
+setInterval(()=>{if(room&&player&&ready&&player.getPlayerState&&player.getPlayerState()===1)socket.emit("sync:request")},2000);
+</script></body></html>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Space+Mono:wght@400;700&display=swap');
+
+:root{
+  --ink:#171513;--ink2:#22201d;--paper:#f5efe5;--paper2:#ebe2d4;--muted:#8b8175;
+  --saffron:#e58b3a;--rust:#b6533c;--maroon:#7c3030;--leaf:#53694d;--cream:#fff9ef;
+  --line:#3a332d;--line2:#d9cdbc;--pink:#d95b78;
+}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:'DM Sans',Arial,sans-serif;background:var(--ink);color:var(--cream)}body{overflow-x:hidden}.hidden{display:none!important}
+button,input{font:inherit}button{cursor:pointer}
+/* ---------- LOGIN ---------- */
+.login{position:fixed;inset:0;z-index:9999;min-height:100vh;display:grid;place-items:center;padding:28px;position:relative;overflow:hidden;background:#1c1713 url('/login-bg.png') center/cover no-repeat}
+.login:before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;background:linear-gradient(90deg,rgba(17,12,8,.62),rgba(17,12,8,.18) 58%,rgba(17,12,8,.42)),linear-gradient(0deg,rgba(15,11,8,.46),transparent 42%);}
+.login:after{content:"";position:absolute;inset:0;z-index:0;background:radial-gradient(circle at 75% 25%,rgba(255,218,160,.16),transparent 28%),radial-gradient(circle at 15% 80%,rgba(207,84,62,.12),transparent 25%);pointer-events:none}
+.login,.login *{pointer-events:auto}.loginCard{pointer-events:auto;position:relative;z-index:10;width:min(465px,94vw);padding:29px 31px 27px;border:1px solid rgba(255,249,239,.24);border-radius:24px;background:rgba(26,21,17,.38);backdrop-filter:blur(20px) saturate(115%);-webkit-backdrop-filter:blur(18px) saturate(115%);box-shadow:0 24px 70px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.12)}
+.loginTop{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.logo{font-weight:800;letter-spacing:.06em;font-size:22px;color:var(--cream)}.logo span{color:var(--saffron);font-size:14px;margin-left:2px}.logo small{display:block;color:#bcb1a4;font-size:9px;font-weight:600;letter-spacing:.08em;margin-top:4px}.eyebrow{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:#e4c9a7;border:1px solid rgba(255,249,239,.18);border-radius:999px;padding:7px 9px;background:rgba(255,255,255,.06)}
+.loginCard h1{font-family:'Playfair Display',Georgia,serif;font-size:43px;line-height:.98;letter-spacing:-.04em;margin:0 0 12px;color:#fff8ee}.loginCard h1 em{color:#f0ad65;font-style:italic}.loginCard .sub{font-size:13px;line-height:1.55;color:#d0c4b7;margin:0 0 20px;max-width:390px}.quote{margin:0 0 22px;padding:11px 13px;border-left:2px solid var(--saffron);background:rgba(255,248,237,.07);border-radius:0 10px 10px 0;color:#eadbca!important;font-size:12px!important;font-style:italic}
+.loginFields{display:grid;gap:12px}.field{display:grid;gap:6px}.field label{font-size:9px;text-transform:uppercase;letter-spacing:.13em;font-weight:800;color:#c6b8a9}.field{position:relative;z-index:4}.field input{display:block;position:relative;z-index:100;pointer-events:auto;user-select:text;touch-action:manipulation;cursor:text;-webkit-user-select:text;caret-color:#f0ad65;width:100%;background:rgba(7,6,5,.34);border:1px solid rgba(255,249,239,.22);color:#fff9ef;border-radius:11px;padding:13px 14px;outline:0}.field input::placeholder{color:#9e9185}.field input:focus{border-color:#efb26d;box-shadow:0 0 0 3px rgba(229,139,58,.13)}#roomCodeInput{text-transform:uppercase;letter-spacing:.1em;font-family:'Space Mono',monospace}.loginAction{display:grid;grid-template-columns:1fr;gap:9px;margin-top:16px}.primary{border:0;border-radius:11px;padding:13px 16px;background:var(--saffron);color:#24160d;font-weight:800;box-shadow:0 10px 25px rgba(229,139,58,.22)}.primary:hover{background:#efa75a;transform:translateY(-1px)}.roomHint{border:1px solid rgba(255,249,239,.2);background:rgba(255,255,255,.06);border-radius:11px;padding:0 13px;color:#ded0c0;font-size:11px}.loginFoot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;color:#a99b8d;font-size:9px;text-transform:uppercase;letter-spacing:.08em}.loginFoot span:nth-child(2){color:#dfb67d}.error{color:#ff9d8e;font-size:11px;text-align:center;min-height:15px;margin-top:8px}
+/* ---------- APP SHELL ---------- */
+#app{position:relative;z-index:1;max-width:1600px;margin:auto;padding:14px 22px;background:radial-gradient(circle at 10% 0%,rgba(229,139,58,.08),transparent 26%),radial-gradient(circle at 100% 90%,rgba(83,105,77,.08),transparent 24%);min-height:100vh}
+header{height:65px;display:flex;align-items:center;gap:18px;border-bottom:1px solid #332e29}.headerLogo .logo{font-size:20px}.headerLogo{min-width:230px}.roomBox{margin:auto;border:1px solid #453d35;background:#211e1b;border-radius:11px;padding:7px 9px;color:#948a7f;font-size:9px;letter-spacing:.1em}.roomBox b{font-family:'Space Mono';font-size:14px;color:#e4a45e;margin:0 12px}.roomBox button{background:#312b26;border:1px solid #494038;color:#eee4d7;border-radius:7px;padding:6px 9px;font-size:9px}.me{display:flex;align-items:center;gap:8px}.me span{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;border:1px solid #a75a43;background:#30221c;color:#f0b67b;font-weight:800}.me button{background:none;border:0;color:#8e8478;font-size:20px}
+main{display:grid;grid-template-columns:220px minmax(0,1fr) 330px;gap:14px;padding-top:14px}nav{display:flex;flex-direction:column;gap:5px}nav button{background:transparent;border:1px solid transparent;color:#a79d92;text-align:left;padding:11px 12px;border-radius:10px}nav button:hover{background:#211e1a;color:#f3e8dc}nav button.active{background:#2a241e;border-color:#4c4033;color:#f0b16b}
+.people,.vibeBox,.playerCard,.queueCard,.chat,.roomVibe{background:#161513;border:1px solid #302c28;border-radius:15px}.people{margin-top:13px;padding:15px}.people h3{font-size:9px;color:#b5a99c;letter-spacing:.12em;margin:0 0 12px}.people h3 span{color:#e1a25f;margin-left:5px}.user{display:flex;align-items:center;gap:8px;padding:7px 0;font-size:12px}.user i{width:27px;height:27px;border-radius:50%;display:grid;place-items:center;color:#21160f;font-style:normal;font-weight:900}.user small{margin-left:auto;color:#766c62}.user em{font-style:normal;color:#7e9b72;font-size:8px}.vibeBox{margin-top:13px;padding:15px;color:#e4a15c;font-size:11px;background:linear-gradient(145deg,#1b1713,#151614)}.vibeBox span{display:block;color:#81776d;margin-top:5px}.crowd{height:75px;margin-top:12px;border-radius:10px;background:linear-gradient(135deg,rgba(229,139,58,.13),rgba(83,105,77,.12));display:grid;place-items:center;color:#d99a5b;font-size:31px}
+/* ---------- PLAYER ---------- */
+.playerCard{overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.24)}.now{padding:13px 16px;color:#d99b60;font-weight:800;font-size:10px;letter-spacing:.1em;display:flex;justify-content:space-between}.now span{font-size:20px;color:#c96a72}.playerCard #player{width:100%;aspect-ratio:16/9;background:#080807}.track{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:14px 16px}.track>div:first-child{flex:1;min-width:0}.track b,.track span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.track b{font-size:13px}.track span{font-size:10px;color:#81776e;margin-top:4px}.track button{background:#26221f;color:#eadfd2;border:1px solid #3e3832;border-radius:9px;padding:8px 10px}.track #spotify{background:#263026;color:#a9c89c;border-color:#3d4c3a}.controls{display:flex;align-items:center;gap:10px;padding:0 16px;color:#766d65;font-family:'Space Mono';font-size:9px}.controls input{flex:1;accent-color:#d98f45}.controlBtns{display:flex;justify-content:center;gap:18px;padding:15px}.controlBtns button{border:0;background:none;color:#d8cec3;font-size:18px}.controlBtns button:hover{color:#f0ad65}.controlBtns .play{width:48px;height:48px;border-radius:50%;background:#e39a50;color:#24160d;box-shadow:0 8px 22px rgba(227,154,80,.22)}
+.loadRow{display:flex;gap:8px;margin:12px 0}.loadRow input{flex:1;min-width:180px;background:#171614;border:1px solid #38322c;color:#fff;border-radius:10px;padding:12px;outline:0}.loadRow input:focus{border-color:#c98a4e}.loadRow button{background:#25221f;color:#e7ddd2;border:1px solid #3d3730;border-radius:9px;padding:0 13px}.loadRow button:first-of-type{background:#d88b46;color:#24170f;border-color:#d88b46}.loadRow #searchMusic{background:#30251f;color:#e9b77d;border-color:#5a4431}
+.queueCard{padding:15px}.head{display:flex;justify-content:space-between;align-items:center}.head h2{font-size:12px;color:#e0a25e;margin:0 0 10px;letter-spacing:.05em}.head button{background:#25221f;color:#e7ddd2;border:1px solid #3b352f;border-radius:8px;padding:6px 9px}.q{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid #292622}.q>b{color:#746b62}.q div{flex:1;min-width:0}.q strong,.q small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.q strong{font-size:12px}.q small{color:#766d64;font-size:10px;margin-top:3px}.q button{background:none;border:0;color:#776d63;font-size:18px}.empty{padding:15px 0;color:#6e655d;font-size:11px}
+/* ---------- RIGHT ---------- */
+.chat{height:560px;padding:15px;display:flex;flex-direction:column}.chat .head h2{color:#dba05f}.chat #messages{flex:1;overflow:auto}.msg{display:flex;gap:8px;margin:11px 0}.msg>i{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}.msg b{font-size:11px}.msg small{color:#554e47;margin-left:6px;font-size:9px}.msg p{font-size:11px;color:#cfc4b8;margin:3px 0;overflow-wrap:anywhere}.chat form{display:flex;gap:7px;margin-top:8px}.chat input{width:100%;background:#0f0e0d;border:1px solid #39332d;color:#fff;border-radius:9px;padding:11px;outline:0}.chat form button{background:#d88e4a;color:#25170f;border:0;border-radius:9px;width:42px}.roomVibe{margin-top:13px;padding:18px;text-align:center;background:linear-gradient(145deg,#1b1714,#141512)}.roomVibe h3{color:#a99b8e;font-size:9px;letter-spacing:.12em}.roomVibe h3 span{color:#d99550}.roomVibe strong{display:block;color:#e2a15e;margin-top:18px}.bigHeart{font-size:58px;color:#bd5f62;margin:4px}.roomVibe p{color:#776d64;font-size:11px}.roomVibe button{width:100%;padding:10px;background:#29221d;color:#e9b57b;border:1px solid #4c3b2c;border-radius:8px}.roomVibe #spotifyPlaylist{margin-top:8px;background:#20271f;color:#a9c69d;border-color:#40513b}
+/* ---------- MODALS / SEARCH ---------- */
+.modal{position:fixed;inset:0;background:rgba(9,7,5,.72);backdrop-filter:blur(8px);display:grid;place-items:center;z-index:20;padding:20px}.modalCard{position:relative;width:min(620px,100%);background:#1b1917;border:1px solid #4a3d31;border-radius:18px;padding:22px;box-shadow:0 24px 70px rgba(0,0,0,.5)}.modalCard h2{font-family:'Playfair Display',Georgia,serif;color:#f0b16b;margin-top:0}.modalCard p{color:#92887e;font-size:12px;line-height:1.5}.modalCard input{width:100%;padding:13px;border-radius:10px;background:#0e0d0c;border:1px solid #38322c;color:#fff;margin:8px 0}.modalCard .primary{margin-top:8px}.close{position:absolute;right:12px;top:10px;background:none;border:0;color:#8d8277;font-size:26px}.modalCard iframe{margin-top:15px;border-radius:12px;max-width:100%}.searchCard{max-height:82vh;overflow:auto}.searchBar{display:flex;gap:8px}.searchBar input{flex:1}.searchBar button,.secondarySearch{background:#d88c48;color:#24160e;border:0;border-radius:9px;padding:0 14px;font-weight:800}.searchResults{margin-top:14px;display:flex;flex-direction:column;gap:8px}.searchItem{display:flex;align-items:center;gap:10px;padding:9px;background:#11100f;border:1px solid #302b26;border-radius:10px}.searchItem img{width:96px;height:54px;object-fit:cover;border-radius:7px}.searchItem div{flex:1;min-width:0}.searchItem strong,.searchItem small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.searchItem strong{font-size:11px}.searchItem small{color:#71685f;font-size:9px;margin-top:4px}.searchItem button{background:#25221f;color:#eee;border:1px solid #3d3730;border-radius:7px;padding:7px 9px;font-size:9px}.searchItem button:first-of-type{background:#53694d;color:#f4f0e8;border-color:#53694d}.toast{position:fixed;bottom:24px;left:50%;transform:translate(-50%,20px);background:#f5eadc;color:#21170f;padding:10px 15px;border-radius:10px;font-weight:800;font-size:12px;opacity:0;transition:.2s;z-index:30;box-shadow:0 10px 30px #0005}.toast.show{opacity:1;transform:translate(-50%,0)}
+/* ---------- RESPONSIVE ---------- */
+@media(max-width:1100px){main{grid-template-columns:180px minmax(0,1fr)}main>.right{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:14px}.chat{height:420px}.roomVibe{margin:0}}@media(max-width:700px){#app{padding:10px}header{height:auto;flex-wrap:wrap;padding:8px 0}.headerLogo{min-width:auto}.roomBox{order:3;width:100%;text-align:center}.me{margin-left:auto}main{display:block}.left{display:none}.right{margin-top:12px!important;display:block!important}.chat{height:390px}.roomVibe{margin-top:12px}.loadRow{flex-wrap:wrap}.loadRow input{flex-basis:100%}.loadRow button{height:42px;flex:1}.controlBtns{gap:12px}.login{padding:14px;background-position:center}.loginCard{padding:24px 20px}.loginCard h1{font-size:36px}.loginAction{grid-template-columns:1fr}.roomHint{height:42px}.loginFoot{flex-direction:column}.searchBar{flex-direction:column}.searchBar button{height:42px}.searchItem img{width:72px;height:42px}.searchItem button{padding:6px}}
+
+.login{isolation:isolate}.loginCard,.loginFields,.field,.field input{isolation:isolate}.login input:focus{caret-color:#efb26d}
+\nbutton:disabled,input:disabled{opacity:.45;cursor:not-allowed} .user small{margin-left:6px;color:#d99b60;font-size:8px}\n
+/* SANGAT LOGIN — FINAL CENTERED LOGIN */
+.login-screen{position:fixed;inset:0;width:100vw;height:100vh;min-height:100vh;z-index:100000;display:grid;place-items:center;padding:20px;margin:0;overflow:auto;background:#17110d;}
+.login-screen.hidden{display:none!important}
+.login-backdrop{position:absolute;inset:0;width:100%;height:100%;background:linear-gradient(rgba(18,12,8,.58),rgba(18,12,8,.78)),url('/login-bg.png') center center/cover no-repeat;pointer-events:none;}
+.login-card{position:relative;z-index:100001;width:min(470px,calc(100vw - 40px));margin:0;align-self:center;justify-self:center;padding:32px;border:1px solid rgba(255,255,255,.18);border-radius:22px;background:rgba(28,22,17,.92);box-shadow:0 30px 80px rgba(0,0,0,.55);color:#fff9ef;}
+.login-brand{font-weight:800;font-size:21px;letter-spacing:.06em}.login-brand span{color:#e58b3a}.login-brand small{display:block;font-size:9px;color:#a99b8d;letter-spacing:.08em;margin-top:4px}.login-badge{position:absolute;right:30px;top:31px;border:1px solid rgba(255,255,255,.18);border-radius:99px;padding:6px 9px;font-size:8px;letter-spacing:.12em;color:#d9c5ad}
+.login-card h1{margin:38px 0 12px;font:700 43px/1 'Playfair Display',Georgia,serif;letter-spacing:-.04em}.login-card h1 em{color:#f0ad65}.login-sub{color:#cbbeb0;font-size:13px;line-height:1.55;margin:0 0 24px}.login-form{display:flex;flex-direction:column;gap:8px}.login-form label{font-size:9px;font-weight:800;letter-spacing:.13em;color:#c8b9aa;margin-top:4px}.login-form label span{font-weight:500;color:#85796d}.login-form input{position:relative;z-index:100002;display:block;width:100%;height:48px;padding:0 14px;box-sizing:border-box;border:1px solid #51463c;border-radius:11px;background:#0d0b09;color:#fff;outline:none;opacity:1;pointer-events:auto;user-select:text;-webkit-user-select:text;cursor:text;caret-color:#f0ad65;touch-action:auto;-webkit-appearance:none;appearance:none}.login-form input::placeholder{color:#81756a}.login-form input:focus{border-color:#e58b3a;box-shadow:0 0 0 3px rgba(229,139,58,.14)}.enter-button{position:relative;z-index:100002;width:100%;height:48px;margin-top:10px;border:0;border-radius:11px;background:#e58b3a;color:#24160d;font-weight:800;cursor:pointer;pointer-events:auto}.enter-button:hover{background:#f0a05a}.login-error{min-height:18px;color:#ff9b8c;text-align:center;font-size:11px}.login-note{text-align:center;margin-top:18px;color:#81766b;font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+@media(max-width:600px){.login-screen{padding:14px}.login-card{width:min(470px,calc(100vw - 28px));padding:24px}.login-card h1{font-size:36px}.login-badge{right:24px;top:24px}}
+
+/* FINAL LOGIN LAYOUT RESET — centered and interactive */
+html, body { width:100%; min-height:100%; margin:0; }
+body { overflow-x:hidden; }
+#login.login-screen {
+  position:fixed !important;
+  inset:0 !important;
+  width:100% !important;
+  height:100dvh !important;
+  min-height:100vh !important;
+  margin:0 !important;
+  padding:24px !important;
+  box-sizing:border-box !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  overflow-y:auto !important;
+  overflow-x:hidden !important;
+  isolation:isolate !important;
+}
+#login .login-backdrop {
+  position:absolute !important;
+  inset:0 !important;
+  z-index:-1 !important;
+  pointer-events:none !important;
+}
+#login .login-card {
+  position:relative !important;
+  inset:auto !important;
+  top:auto !important;
+  right:auto !important;
+  bottom:auto !important;
+  left:auto !important;
+  transform:none !important;
+  float:none !important;
+  flex:none !important;
+  align-self:center !important;
+  justify-self:auto !important;
+  margin:auto !important;
+  width:min(470px, 100%) !important;
+  max-height:calc(100dvh - 48px) !important;
+  box-sizing:border-box !important;
+  overflow-y:auto !important;
+  z-index:2 !important;
+}
+#login .login-form,
+#login .login-form label,
+#login .login-form input,
+#login .login-form button { position:relative !important; z-index:3 !important; }
+#login .login-form input {
+  pointer-events:auto !important;
+  user-select:text !important;
+  -webkit-user-select:text !important;
+  touch-action:auto !important;
+}
+#login.hidden { display:none !important; }
+@media (max-width:600px) {
+  #login.login-screen { padding:14px !important; }
+  #login .login-card { width:100% !important; max-height:calc(100dvh - 28px) !important; }
+}
+
+/* ---------- SANGAT VIBE METER ---------- */
+.vibeMeter{margin-top:13px;padding:15px;background:#161513;border:1px solid #302c28;border-radius:15px;max-height:520px;overflow:auto}
+.vibeMeter .head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.vibeMeter .head h2{font-size:12px;color:#e0a25e;margin:0;letter-spacing:.05em}
+.vibeMeter select{background:#211e1b;border:1px solid #40372f;color:#cfc4b8;border-radius:7px;padding:6px 7px;font-size:9px;outline:none}
+.vibeHint{color:#756c63;font-size:10px;margin:8px 0 10px}
+.vibeUser{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #292622}
+.vibeIdentity{display:flex;align-items:center;gap:8px;min-width:0}
+.vibeIdentity>i{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;color:#21160f;font-style:normal;font-weight:900;flex:none}
+.vibeIdentity div{min-width:0}
+.vibeIdentity b,.vibeIdentity small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vibeIdentity b{font-size:11px}
+.vibeIdentity small{font-size:8px;color:#756c63;margin-top:2px}
+.vibeActions{display:flex;align-items:center;gap:4px;flex:none}
+.vibeActions strong{min-width:28px;text-align:center;color:#aaa097;font-size:11px}
+.vibeActions strong.positive{color:#7fd08c}.vibeActions strong.negative{color:#ef8b8b}
+.vibeVote{border:1px solid #39332d;background:#211f1c;color:#bdb2a7;border-radius:7px;padding:5px 6px;font-size:11px;line-height:1;cursor:pointer}
+.vibeVote:hover{border-color:#a77b50}.vibeVote.selected{background:#3a2b20;border-color:#d88e4a;box-shadow:0 0 0 1px rgba(216,142,74,.15)}
+/* YouTube panel embedded inside SANGAT */
+.youtubeCard{width:min(820px,100%)}
+#youtubeFrameWrap{width:100%;aspect-ratio:16/9;background:#080807;border-radius:12px;overflow:hidden;border:1px solid #332d27}
+#youtubeFrameWrap iframe{width:100%;height:100%;border:0;display:block}
+@media(max-width:1100px){.vibeMeter{max-height:420px}}
+@media(max-width:700px){.vibeMeter{max-height:none}.vibeActions{gap:3px}.vibeVote{padding:5px}.vibeMeter .head{align-items:flex-start}.vibeMeter select{max-width:125px}}
+/* Reliable inline YouTube panel */
+.youtubeInline{margin:0 16px 14px;padding:10px;background:#11100f;border:1px solid #3b342d;border-radius:12px}
+.youtubeInline.hidden{display:none!important}
+.youtubeInlineHead{display:flex;align-items:center;justify-content:space-between;color:#e4a45e;font-size:11px;margin-bottom:8px}
+.youtubeInlineHead button{background:none;border:0;color:#a79d92;font-size:20px;line-height:1;cursor:pointer}
+#youtubeFrameWrap{width:100%;aspect-ratio:16/9;background:#080807;border-radius:10px;overflow:hidden;border:1px solid #332d27}
+#youtubeFrameWrap iframe{width:100%;height:100%;border:0;display:block}
+#copy{cursor:pointer;pointer-events:auto;position:relative;z-index:5}
